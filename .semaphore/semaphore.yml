@@ -19,7 +19,7 @@ blocks:
         matrix:
           - env_var: RUBY_VERSION
             values: [ '2.3.5', '2.4.2', '2.5.1', '2.6.0', 'ruby-head', 'jruby-9.1.9.0', 'jruby-9.2.5.0', 'jruby-head' ]
-          - env_var: GEMFILE
+          - env_var: BUNDLE_GEMFILE
             values: [ 'gemfiles/activerecord_4.2.0.gemfile', 'gemfiles/activerecord_5.0.2.gemfile', 'gemfiles/activerecord_5.1.0.gemfile', 'gemfiles/activerecord_5.2.2.gemfile', 'gemfiles/activerecord_6.0.0.gemfile' ]
           - env_var: DB
             values: [ 'sqlite', 'postgres' ]
@@ -30,6 +30,6 @@ blocks:
           - cache restore
           - sem-version ruby $RUBY_VERSION
           - gem install bundler
-          - bundle install --jobs=3 --gemfile $GEMFILE
+          - bundle install --jobs=3
           - cache store
           - bundle exec rubocop && bundle exec rspec

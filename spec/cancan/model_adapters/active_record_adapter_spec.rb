@@ -503,6 +503,125 @@ WHERE "articles"."published" = #{false_v} AND "articles"."secret" = #{true_v}))
     end
   end
 
+  context 'when an association is used to create a rule' do
+    before do
+      ActiveRecord::Schema.define do
+        create_table(:foos) do |t|
+          t.string :name
+        end
+        create_table(:bars) do |t|
+          t.string :name
+        end
+        create_table :roles do |t|
+          t.string :name
+
+          t.timestamps
+        end
+        create_table :user_roles do |t|
+          t.references :user, foreign_key: true
+          t.references :role, foreign_key: true
+          t.references :subject, polymorphic: true
+
+          t.timestamps
+        end
+      end
+
+      class Foo < ActiveRecord::Base
+        has_many :user_roles, as: :subject
+      end
+
+      class Bar < ActiveRecord::Base
+        has_many :user_roles, as: :subject
+      end
+
+      class Role < ActiveRecord::Base
+        has_many :user_roles
+        has_many :users, through: :user_roles
+        has_many :foos, through: :user_roles
+        has_many :bars, through: :user_roles
+      end
+
+      class UserRole < ActiveRecord::Base
+        belongs_to :user
+        belongs_to :role
+        belongs_to :subject, polymorphic: true, required: false
+      end
+    end
+
+    it 'allows for access with association' do
+      user = User.create!
+      foo = Foo.create(name: 'foo')
+      role = Role.create(name: 'adviser')
+      UserRole.create(user: user, role: role, subject: foo)
+      ability = Ability.new(user)
+      ability.can :read, Foo, user_roles: { user: user }
+      expect(ability.can?(:read, Foo)).to eq(true)
+    end
+
+    it 'allows for access with association with accesible_by' do
+      user = User.new
+      foo = Foo.create(name: 'foo')
+      bar = Bar.create(name: 'bar')
+      role = Role.create(name: 'adviser')
+      UserRole.create(user: user, role: role, subject: foo)
+      UserRole.create(user: user, role: role, subject: bar)
+      ability = Ability.new(user)
+      ability.can :read, Foo, user_roles: { user: user }
+      expect(Foo.accessible_by(ability)).to match_array([foo])
+      expect(Bar.accessible_by(ability)).to match_array([])
+    end
+
+    it 'blocks access with association' do
+      user = User.create!
+      foo = Foo.create(name: 'foo')
+      role = Role.create(name: 'adviser')
+      UserRole.create(user: user, role: role, subject: foo)
+      ability = Ability.new(user)
+      ability.cannot :read, Foo, user_roles: { user: user }
+      expect(ability.can?(:read, Foo)).to eq(false)
+    end
+
+    it 'blocks access with association for accesible_by' do
+      user = User.create!
+      foo = Foo.create(name: 'foo')
+      role = Role.create(name: 'adviser')
+      UserRole.create(user: user, role: role, subject: foo)
+      ability = Ability.new(user)
+      ability.cannot :read, Foo, user_roles: { user: user }
+      expect(Foo.accessible_by(ability)).to match_array([])
+      expect(ability.can?(:read, Foo)).to eq(false)
+    end
+
+    it 'manages access with multiple models and users' do
+      (0..5).each do |index|
+        user = User.create!
+        foo = Foo.create(name: 'foo')
+        role = Role.create(name: "adviser_#{index}")
+        UserRole.create(user: user, role: role, subject: foo)
+      end
+
+      user = User.first
+
+      Foo.all.each do |foo|
+        role = Role.create(name: 'new_user')
+        UserRole.create(user: user, role: role, subject: foo)
+      end
+
+      ability = Ability.new(user)
+      ability.can :read, Foo, user_roles: { user: user }
+      expect(Foo.accessible_by(ability).count).to eq(Foo.count)
+
+      User.where.not(id: user.id).each do |limited_permission_user|
+        ability = Ability.new(limited_permission_user)
+        expect(ability.can?(:read, Foo)).to eq(false)
+        expect(Foo.accessible_by(ability).count).to eq(0)
+        ability.can :read, Foo, user_roles: { user: limited_permission_user }
+        expect(ability.can?(:read, Foo)).to eq(true)
+        expect(Foo.accessible_by(ability).count).to eq(1)
+      end
+    end
+  end
+
   context 'when a table references another one twice' do
     before do
       ActiveRecord::Schema.define do
@@ -642,6 +761,94 @@ WHERE "articles"."published" = #{false_v} AND "articles"."secret" = #{true_v}))
       ability.can :read, JsonTransaction, user: { id: user.id }
 
       expect(JsonTransaction.accessible_by(ability)).to match_array([transaction])
+    end
+  end
+
+  context 'when STI is in use' do
+    before do
+      ActiveRecord::Schema.define do
+        create_table(:brands) do |t|
+          t.string :name
+        end
+
+        create_table(:vehicles) do |t|
+          t.string :type
+        end
+      end
+
+      class ApplicationRecord < ActiveRecord::Base
+        self.abstract_class = true
+      end
+
+      class Vehicle < ApplicationRecord
+      end
+
+      class Car < Vehicle
+      end
+
+      class Motorbike < Vehicle
+      end
+
+      class Suzuki < Motorbike
+      end
+    end
+
+    it 'recognises rules applied to the base class' do
+      u1 = User.create!(name: 'pippo')
+
+      car = Car.create!
+      motorbike = Motorbike.create!
+
+      ability = Ability.new(u1)
+      ability.can :read, Vehicle
+      expect(Vehicle.accessible_by(ability)).to match_array([car, motorbike])
+      expect(Car.accessible_by(ability)).to match_array([car])
+      expect(Motorbike.accessible_by(ability)).to match_array([motorbike])
+    end
+
+    it 'recognises rules applied to the base class multiple classes deep' do
+      u1 = User.create!(name: 'pippo')
+
+      car = Car.create!
+      motorbike = Motorbike.create!
+      suzuki = Suzuki.create!
+
+      ability = Ability.new(u1)
+      ability.can :read, Vehicle
+      expect(Vehicle.accessible_by(ability)).to match_array([suzuki, car, motorbike])
+      expect(Car.accessible_by(ability)).to match_array([car])
+      expect(Motorbike.accessible_by(ability)).to match_array([suzuki, motorbike])
+      expect(Suzuki.accessible_by(ability)).to match_array([suzuki])
+    end
+
+    it 'recognises rules applied to subclasses' do
+      u1 = User.create!(name: 'pippo')
+      car = Car.create!
+      Motorbike.create!
+
+      ability = Ability.new(u1)
+      ability.can :read, [Car]
+      expect(Vehicle.accessible_by(ability)).to match_array([car])
+      expect(Car.accessible_by(ability)).to eq([car])
+      expect(Motorbike.accessible_by(ability)).to eq([])
+    end
+
+    it 'recognises rules applied to subclasses on 3 level' do
+      u1 = User.create!(name: 'pippo')
+      suzuki = Suzuki.create!
+      Motorbike.create!
+      ability = Ability.new(u1)
+      ability.can :read, [Suzuki]
+      expect(Motorbike.accessible_by(ability)).to eq([suzuki])
+    end
+
+    it 'recognises rules applied to subclass of subclass even with be_able_to' do
+      u1 = User.create!(name: 'pippo')
+      motorbike = Motorbike.create!
+      ability = Ability.new(u1)
+      ability.can :read, [Motorbike]
+      expect(ability).to be_able_to(:read, motorbike)
+      expect(ability).to be_able_to(:read, Suzuki.new)
     end
   end
 end
